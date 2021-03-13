@@ -29,6 +29,18 @@ namespace LoginComponent.API
 
         public void ConfigureServices(IServiceCollection services)
         {
+            services.AddCors(options =>
+            {
+                options.AddPolicy(name: "mata",
+                    builder =>
+                    {
+                        builder.WithOrigins("*")
+                            .AllowAnyHeader()
+                            .AllowAnyMethod();
+                        ;
+                    });
+            });
+            
             services.AddControllers();
             //EF CORE setup
             services.AddDbContext<UsersDbContext>(options =>
@@ -70,6 +82,8 @@ namespace LoginComponent.API
 
             app.UseRouting();
 
+            app.UseCors("mata");
+            
             app.UseAuthentication();
             app.UseAuthorization();
 

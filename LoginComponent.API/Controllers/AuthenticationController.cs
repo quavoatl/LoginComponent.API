@@ -8,6 +8,7 @@ using System.Security.Claims;
 using System.Text;
 using System.Threading.Tasks;
 using LoginComponent.API.Authentication;
+using Microsoft.AspNetCore.Cors;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
@@ -15,7 +16,7 @@ using JwtRegisteredClaimNames = Microsoft.IdentityModel.JsonWebTokens.JwtRegiste
 
 namespace LoginComponent.API.Controllers
 {
-    [Route("api/[controller]")]
+    [EnableCors(policyName: "mata")]
     [ApiController]
     public class AuthenticationController : ControllerBase
     {
@@ -23,15 +24,15 @@ namespace LoginComponent.API.Controllers
         private readonly RoleManager<IdentityRole> _roleManager;
         private readonly IConfiguration _config;
 
-        public AuthenticationController(UserManager<User> userManager, RoleManager<IdentityRole> roleManager, IConfiguration config)
+        public AuthenticationController(UserManager<User> userManager, RoleManager<IdentityRole> roleManager,
+            IConfiguration config)
         {
             _userManager = userManager;
             _roleManager = roleManager;
             _config = config;
         }
 
-        [HttpPost]
-        [Route("login")]
+        [HttpPost("api/login")]
         public async Task<IActionResult> Login([FromBody] LoginModel model)
         {
             var user = await _userManager.FindByNameAsync(model.Username);
@@ -42,8 +43,8 @@ namespace LoginComponent.API.Controllers
                 var authClaims = new List<Claim>
                 {
                     new Claim(ClaimTypes.Name, user.UserName),
-                    //new Claim(ClaimTypes.Role, userRoles[0]),
-                    new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
+                    new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+                    new Claim("userId", user.Id)
                 };
 
                 foreach (var role in userRoles)
@@ -70,16 +71,15 @@ namespace LoginComponent.API.Controllers
             return Unauthorized();
         }
 
-        [HttpPost]
-        [Route("register")]
+        [HttpPost("api/register")]
         public async Task<IActionResult> Register([FromBody] RegisterModel model)
         {
             var userExists = await _userManager.FindByNameAsync(model.Username);
 
             if (userExists != null)
             {
-                return StatusCode(StatusCodes.Status500InternalServerError,
-                    new Response() { Status = "Error", Message = "User already exists", });
+                return StatusCode(StatusCodes.Status409Conflict,
+                    new Response() {Status = "Failed", Errors = new[] {"User already exists"}});
             }
 
             User user = new User()
@@ -94,24 +94,16 @@ namespace LoginComponent.API.Controllers
             if (!result.Succeeded)
             {
                 return StatusCode(StatusCodes.Status500InternalServerError,
-                    new Response() { Status = "Error", Message = "User creation has failed", });
+                    new Response() {Status = "Failed", Errors = new[] {"User creation has failed"}});
             }
 
-            #region Create Roles
+            await AddUserToRole(model, user);
 
-            if (!await _roleManager.RoleExistsAsync(UserRoles.Broker))
-            {
-                await _roleManager.CreateAsync(new IdentityRole(UserRoles.Broker));
-            }
+            return Ok(new Response() {Status = "Created", Errors = new[] {string.Empty}});
+        }
 
-            if (!await _roleManager.RoleExistsAsync(UserRoles.Customer))
-            {
-                await _roleManager.CreateAsync(new IdentityRole(UserRoles.Customer));
-            }
-            #endregion
-
-            #region Add to Role
-
+        private async Task AddUserToRole(RegisterModel model, User user)
+        {
             if (model.IsBroker)
             {
                 if (await _roleManager.RoleExistsAsync(UserRoles.Broker))
@@ -126,21 +118,19 @@ namespace LoginComponent.API.Controllers
                     await _userManager.AddToRoleAsync(user, UserRoles.Customer);
                 }
             }
-
-            #endregion
-
-            return Ok(new Response() { Message = "User created successfully", Status = "Success" });
         }
 
+        private async Task CreateRoles()
+        {
+            if (!await _roleManager.RoleExistsAsync(UserRoles.Broker))
+            {
+                await _roleManager.CreateAsync(new IdentityRole(UserRoles.Broker));
+            }
 
-
-
-
-
-
-
-
-
-
+            if (!await _roleManager.RoleExistsAsync(UserRoles.Customer))
+            {
+                await _roleManager.CreateAsync(new IdentityRole(UserRoles.Customer));
+            }
+        }
     }
 }
