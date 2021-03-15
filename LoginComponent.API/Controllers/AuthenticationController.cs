@@ -8,6 +8,9 @@ using System.Security.Claims;
 using System.Text;
 using System.Threading.Tasks;
 using LoginComponent.API.Authentication;
+using LoginComponent.API.Contracts.V1.Requests;
+using LoginComponent.API.Contracts.V1.Responses;
+using LoginComponent.API.Services;
 using Microsoft.AspNetCore.Cors;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Configuration;
@@ -20,55 +23,39 @@ namespace LoginComponent.API.Controllers
     [ApiController]
     public class AuthenticationController : ControllerBase
     {
-        private readonly UserManager<User> _userManager;
+        private readonly UserManager<IdentityUser> _userManager;
         private readonly RoleManager<IdentityRole> _roleManager;
         private readonly IConfiguration _config;
+        private readonly IDatabaseService _databaseService;
 
-        public AuthenticationController(UserManager<User> userManager, RoleManager<IdentityRole> roleManager,
-            IConfiguration config)
+        public AuthenticationController(UserManager<IdentityUser> userManager, RoleManager<IdentityRole> roleManager,
+            IConfiguration config, IDatabaseService databaseService)
         {
             _userManager = userManager;
             _roleManager = roleManager;
             _config = config;
+            _databaseService = databaseService;
         }
 
         [HttpPost("api/login")]
         public async Task<IActionResult> Login([FromBody] LoginModel model)
         {
-            var user = await _userManager.FindByNameAsync(model.Username);
+            var authResult = await _databaseService.LoginAsync(model.Username, model.Password);
 
-            if (user != null && await _userManager.CheckPasswordAsync(user, model.Password))
+            if (authResult.Success)
             {
-                var userRoles = await _userManager.GetRolesAsync(user);
-                var authClaims = new List<Claim>
+                return Ok(new LoginResponse()
                 {
-                    new Claim(ClaimTypes.Name, user.UserName),
-                    new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-                    new Claim("userId", user.Id)
-                };
-
-                foreach (var role in userRoles)
-                {
-                    authClaims.Add(new Claim(ClaimTypes.Role, role));
-                }
-
-                var authSignInKey = new SymmetricSecurityKey(Encoding.ASCII.GetBytes(_config["JWT:Secret"]));
-
-                var token = new JwtSecurityToken(
-                    issuer: _config["JWT:ValidIssuer"],
-                    audience: _config["JWT:ValidAudience"],
-                    expires: DateTime.Now.AddHours(5),
-                    claims: authClaims,
-                    signingCredentials: new SigningCredentials(authSignInKey, SecurityAlgorithms.HmacSha256)
-                );
-
-                return Ok(new
-                {
-                    token = new JwtSecurityTokenHandler().WriteToken(token)
+                    Success = true,
+                    Messages = new[] {authResult.Token, authResult.RefreshToken} //0: Token, 1: RefreshToken
                 });
             }
 
-            return Unauthorized();
+            return Unauthorized(new LoginResponse()
+            {
+                Success = false,
+                Messages = new[] {"Failed to login !"}
+            });
         }
 
         [HttpPost("api/register")]
@@ -82,7 +69,7 @@ namespace LoginComponent.API.Controllers
                     new Response() {Status = "Failed", Errors = new[] {"User already exists"}});
             }
 
-            User user = new User()
+            var user = new IdentityUser()
             {
                 Email = model.Email,
                 SecurityStamp = Guid.NewGuid().ToString(),
@@ -102,35 +89,32 @@ namespace LoginComponent.API.Controllers
             return Ok(new Response() {Status = "Created", Errors = new[] {string.Empty}});
         }
 
-        private async Task AddUserToRole(RegisterModel model, User user)
+        [HttpPost("/api/refresh")]
+        public async Task<IActionResult> Refresh([FromBody] RefreshTokenRequest refreshTokenRequest)
         {
-            if (model.IsBroker)
+            var authResponse =
+                await _databaseService.RefreshTokenAsync(refreshTokenRequest.Token, refreshTokenRequest.RefreshToken);
+
+            if (!authResponse.Success)
             {
-                if (await _roleManager.RoleExistsAsync(UserRoles.Broker))
+                return BadRequest(new LoginResponse()
                 {
-                    await _userManager.AddToRoleAsync(user, UserRoles.Broker);
-                }
+                    Messages = authResponse.Errors
+                });
             }
-            else
+
+            return Ok(new LoginResponse()
             {
-                if (await _roleManager.RoleExistsAsync(UserRoles.Customer))
-                {
-                    await _userManager.AddToRoleAsync(user, UserRoles.Customer);
-                }
-            }
+                Success = true,
+                Messages = new[] {authResponse.Token, authResponse.RefreshToken} //0: Token, 1: RefreshToken
+            });
         }
 
-        private async Task CreateRoles()
-        {
-            if (!await _roleManager.RoleExistsAsync(UserRoles.Broker))
-            {
-                await _roleManager.CreateAsync(new IdentityRole(UserRoles.Broker));
-            }
 
-            if (!await _roleManager.RoleExistsAsync(UserRoles.Customer))
-            {
-                await _roleManager.CreateAsync(new IdentityRole(UserRoles.Customer));
-            }
+        private async Task AddUserToRole(RegisterModel model, IdentityUser user)
+        {
+            if (model.IsBroker) await _userManager.AddToRoleAsync(user, UserRoles.Broker);
+            else await _userManager.AddToRoleAsync(user, UserRoles.Customer);
         }
     }
 }

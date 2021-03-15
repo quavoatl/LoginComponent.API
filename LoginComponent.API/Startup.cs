@@ -11,6 +11,8 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using LoginComponent.API.Authentication;
+using LoginComponent.API.Options;
+using LoginComponent.API.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -40,16 +42,30 @@ namespace LoginComponent.API
                         ;
                     });
             });
-            
+
+            var jwtSettings = new JwtSettings();
+            Configuration.Bind(nameof(jwtSettings), jwtSettings);
+            services.AddSingleton(jwtSettings);
+            services.AddScoped<IDatabaseService, DatabaseService>();
+
             services.AddControllers();
             //EF CORE setup
             services.AddDbContext<UsersDbContext>(options =>
                 options.UseSqlServer(Configuration.GetConnectionString("ConnString")));
 
             // For Identity
-            services.AddIdentity<User, IdentityRole>()
+            services.AddIdentity<IdentityUser, IdentityRole>()
                 .AddEntityFrameworkStores<UsersDbContext>()
                 .AddDefaultTokenProviders();
+
+            var tokenValidationParameters = new TokenValidationParameters()
+            {
+                ValidateIssuer = true,
+                ValidateAudience = true,
+                ValidAudience = jwtSettings.ValidAudience,
+                ValidIssuer = jwtSettings.ValidIssuer,
+                IssuerSigningKey = new SymmetricSecurityKey(Encoding.ASCII.GetBytes(jwtSettings.Secret)),
+            };
 
             //Add Authentication via JWT 
             services.AddAuthentication(options =>
@@ -62,15 +78,10 @@ namespace LoginComponent.API
                 {
                     options.SaveToken = true;
                     options.RequireHttpsMetadata = false;
-                    options.TokenValidationParameters = new TokenValidationParameters()
-                    {
-                        ValidateIssuer = true,
-                        ValidateAudience = true,
-                        ValidAudience = Configuration["JWT:ValidAudience"],
-                        ValidIssuer = Configuration["JWT:ValidIssuer"],
-                        IssuerSigningKey = new SymmetricSecurityKey(Encoding.ASCII.GetBytes(Configuration["JWT:Secret"])),
-                    };
+                    options.TokenValidationParameters = tokenValidationParameters;
                 });
+
+            services.AddSingleton(tokenValidationParameters);
         }
 
         public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
@@ -83,14 +94,11 @@ namespace LoginComponent.API
             app.UseRouting();
 
             app.UseCors("mata");
-            
+
             app.UseAuthentication();
             app.UseAuthorization();
 
-            app.UseEndpoints(endpoints =>
-            {
-                endpoints.MapControllers();
-            });
+            app.UseEndpoints(endpoints => { endpoints.MapControllers(); });
         }
     }
 }
